@@ -6,18 +6,18 @@ const { promisify } = require('util');
 const readFileAsync = promisify(fs.readFile);
 const writeFileAsync = promisify(fs.writeFile);
 
-const credentials = JSON.parse(fs.readFileSync('./credentials.json'));
+const credentials = JSON.parse(fs.readFileSync('credentials.json'));
 const { client_secret, client_id, redirect_uris } = credentials.web;
 
 const transporter = nodemailer.createTransport({
   service: 'gmail',
   auth: {
     type: 'OAuth2',
-    user: 'vinit9email@gmail.com',
+    user: 'your-email@gmail.com',
     clientId: client_id,
     clientSecret: client_secret,
     refreshToken: credentials.refresh_token,
-    accessToken: '', // Leave this empty for now
+    accessToken: '',
   },
 });
 
@@ -28,10 +28,10 @@ async function authorize() {
     const token = await readFileAsync('token.json');
     oAuth2Client.setCredentials(JSON.parse(token));
 
-    if (!oAuth2Client.credentials.access_token || oAuth2Client.isTokenExpired()) {
-      const tokenResponse = await oAuth2Client.refreshAccessToken();
-      oAuth2Client.setCredentials(tokenResponse.credentials);
-      await writeFileAsync('token.json', JSON.stringify(tokenResponse.credentials));
+    if (oAuth2Client.isTokenExpiring()) {
+      const tokenResponse = await oAuth2Client.getAccessToken();
+      oAuth2Client.setCredentials(tokenResponse.token);
+      await writeFileAsync('token.json', JSON.stringify(tokenResponse.token));
     }
 
     transporter.options.auth.accessToken = oAuth2Client.credentials.access_token;
@@ -42,7 +42,7 @@ async function authorize() {
 
 async function sendReply(email) {
   const mailOptions = {
-    from: 'vinit9email@gmail.com',
+    from: 'your-email@gmail.com',
     to: email.from,
     subject: 'Auto Reply',
     text: 'Thank you for your email. I am currently out of the office and will respond as soon as possible.',
@@ -72,7 +72,7 @@ async function checkEmailsAndSendReplies() {
 
     const emails = response.data.messages || [];
 
-    const replyPromises = emails.map(async (email) => {
+    for (const email of emails) {
       const message = await gmail.users.messages.get({
         userId: 'me',
         id: email.id,
@@ -87,9 +87,7 @@ async function checkEmailsAndSendReplies() {
         await sendReply(message.data.payload.headers.find((header) => header.name === 'Reply-To').value);
         await addLabelToEmail(email.id, 'AutoReplied');
       }
-    });
-
-    await Promise.all(replyPromises);
+    }
   } catch (error) {
     console.error('Error checking emails and sending replies:', error);
   }
@@ -98,7 +96,9 @@ async function checkEmailsAndSendReplies() {
 async function runApp() {
   try {
     await authorize();
-    setInterval(checkEmailsAndSendReplies, getRandomInterval());
+    setInterval(async () => {
+      await checkEmailsAndSendReplies();
+    }, getRandomInterval());
   } catch (error) {
     console.error('Error running the app:', error);
   }
