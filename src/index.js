@@ -1,22 +1,18 @@
-const fs = require('fs');
 const { google } = require('googleapis');
 const nodemailer = require('nodemailer');
-const { promisify } = require('util');
 
-const readFileAsync = promisify(fs.readFile);
-const writeFileAsync = promisify(fs.writeFile);
-
-const credentials = JSON.parse(fs.readFileSync('credentials.json'));
-const { client_secret, client_id, redirect_uris } = credentials.web;
+const client_id = '414934956451-qpttsfui0ngkafbk6i1p6b472i0caf9f.apps.googleusercontent.com';
+const client_secret = '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';
+const redirect_uris = ['https://developers.google.com/oauthplayground'];
 
 const transporter = nodemailer.createTransport({
   service: 'gmail',
   auth: {
     type: 'OAuth2',
-    user: 'your-email@gmail.com',
+    user: 'vinit9email@gmail.com',
     clientId: client_id,
     clientSecret: client_secret,
-    refreshToken: credentials.refresh_token,
+    refreshToken: '1//04lVoEqkL5CCGCgYIARAAGAQSNwF-L9Iru3ENshxmOLXh47wjJy0el81vLyXOqFI83e_W4NYuyAwWyDZRqnvMj0q_LG4DEubakvk',
     accessToken: '',
   },
 });
@@ -25,13 +21,12 @@ const oAuth2Client = new google.auth.OAuth2(client_id, client_secret, redirect_u
 
 async function authorize() {
   try {
-    const token = await readFileAsync('token.json');
+    const token = '{}';
     oAuth2Client.setCredentials(JSON.parse(token));
 
     if (oAuth2Client.isTokenExpiring()) {
       const tokenResponse = await oAuth2Client.getAccessToken();
       oAuth2Client.setCredentials(tokenResponse.token);
-      await writeFileAsync('token.json', JSON.stringify(tokenResponse.token));
     }
 
     transporter.options.auth.accessToken = oAuth2Client.credentials.access_token;
@@ -42,7 +37,7 @@ async function authorize() {
 
 async function sendReply(email) {
   const mailOptions = {
-    from: 'your-email@gmail.com',
+    from: 'vinit9email@gmail.com',
     to: email.from,
     subject: 'Auto Reply',
     text: 'Thank you for your email. I am currently out of the office and will respond as soon as possible.',
@@ -80,7 +75,7 @@ async function checkEmailsAndSendReplies() {
 
       const emailThread = message.data.threadId;
       const replies = message.data.payload.headers.filter(
-        (header) => header.name === 'From' && header.value === 'your-email@gmail.com'
+        (header) => header.name === 'From' && header.value === 'vinit9email@gmail.com'
       );
 
       if (replies.length === 0) {
