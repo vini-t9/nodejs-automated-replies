@@ -1,106 +1,117 @@
+const fs = require('fs').promises;
+const path = require('path');
+const { authenticate } = require('@google-cloud/local-auth');
 const { google } = require('googleapis');
 const nodemailer = require('nodemailer');
+const OAuth2 = google.auth.OAuth2;
+const SCOPES = ['https://mail.google.com'];
+const TOKEN_PATH = path.join(__dirname, 'token.json');
+const CREDENTIALS_PATH = path.join(process.cwd(), 'credentials.json');
 
-const client_id = '414934956451-qpttsfui0ngkafbk6i1p6b472i0caf9f.apps.googleusercontent.com';
-const client_secret = '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';
-const redirect_uris = ['https://developers.google.com/oauthplayground'];
-
-const transporter = nodemailer.createTransport({
-  service: 'gmail',
-  auth: {
-    type: 'OAuth2',
-    user: 'vinit9email@gmail.com',
-    clientId: client_id,
-    clientSecret: client_secret,
-    refreshToken: '1//04lVoEqkL5CCGCgYIARAAGAQSNwF-L9Iru3ENshxmOLXh47wjJy0el81vLyXOqFI83e_W4NYuyAwWyDZRqnvMj0q_LG4DEubakvk',
-    accessToken: '',
-  },
-});
-
-const oAuth2Client = new google.auth.OAuth2(client_id, client_secret, redirect_uris[0]);
-
-async function authorize() {
+async function loadSavedCredentialsIfExist() {
   try {
-    const token = '{}';
-    oAuth2Client.setCredentials(JSON.parse(token));
-
-    if (oAuth2Client.isTokenExpiring()) {
-      const tokenResponse = await oAuth2Client.getAccessToken();
-      oAuth2Client.setCredentials(tokenResponse.token);
-    }
-
-    transporter.options.auth.accessToken = oAuth2Client.credentials.access_token;
-  } catch (error) {
-    console.error('Authorization failed. Please check credentials and try again.');
+    const content = await fs.readFile(TOKEN_PATH);
+    const credentials = JSON.parse(content);
+    return google.auth.fromJSON(credentials);
+  } catch (err) {
+    return null;
   }
 }
 
-async function sendReply(email) {
-  const mailOptions = {
-    from: 'vinit9email@gmail.com',
-    to: email.from,
-    subject: 'Auto Reply',
-    text: 'Thank you for your email. I am currently out of the office and will respond as soon as possible.',
-  };
-
-  await transporter.sendMail(mailOptions);
+async function saveCredentials(client) {
+  const content = await fs.readFile(CREDENTIALS_PATH);
+  const keys = JSON.parse(content);
+  const key = keys.installed || keys.web;
+  const payload = JSON.stringify({
+    type: 'authorized_user',
+    client_id: key.client_id,
+    client_secret: key.client_secret,
+    refresh_token: client.credentials.refresh_token,
+  });
+  await fs.writeFile(TOKEN_PATH, payload);
 }
 
-async function addLabelToEmail(emailId, labelName) {
-  const gmail = google.gmail({ version: 'v1', auth: oAuth2Client });
-
-  await gmail.users.messages.modify({
-    userId: 'me',
-    id: emailId,
-    resource: { addLabelIds: [labelName] },
+async function authorize() {
+  let client = await loadSavedCredentialsIfExist();
+  if (client) {
+    return client;
+  }
+  client = await authenticate({
+    scopes: SCOPES,
+    keyfilePath: CREDENTIALS_PATH,
   });
+  if (client.credentials) {
+    await saveCredentials(client);
+  }
+  return client;
 }
 
 async function checkEmailsAndSendReplies() {
-  try {
-    const gmail = google.gmail({ version: 'v1', auth: oAuth2Client });
+  const client = await authorize();
+  const gmail = google.gmail({ version: 'v1', auth: client });
 
-    const response = await gmail.users.messages.list({
+  const res = await gmail.users.messages.list({
+    userId: 'me',
+    q: 'is:unread',
+  });
+
+  if (!res.data.messages) {
+    console.log('No unread emails found.');
+    return;
+  }
+
+  const messages = res.data.messages;
+
+  const email = 'vinit9email@gmail.com';
+
+  const transporter = nodemailer.createTransport({
+    service: 'gmail',
+    auth: {
+      type: 'OAuth2',
+      user: email,
+      clientId: client._clientId,
+      clientSecret: client._clientSecret,
+      refreshToken: client.credentials.refresh_token,
+      accessToken: client.credentials.access_token,
+    },
+  });
+
+  for (const message of messages) {
+    const messageRes = await gmail.users.messages.get({
       userId: 'me',
-      q: 'is:unread',
+      id: message.id,
     });
 
-    const emails = response.data.messages || [];
+    const from = messageRes.data.payload.headers.find(
+      (header) => header.name === 'From'
+    ).value;
+    const fromEmail = from.substring(from.indexOf('<') + 1, from.indexOf('>'));
+    const subject = messageRes.data.payload.headers.find(
+      (header) => header.name === 'Subject'
+    ).value;
 
-    for (const email of emails) {
-      const message = await gmail.users.messages.get({
-        userId: 'me',
-        id: email.id,
-      });
+    const mailOptions = {
+      from: email,
+      to: fromEmail,
+      subject: `Re: ${subject}`,
+      text:
+        'Thank you for your email. I am currently out of the office and will respond as soon as possible. \n\n This is an automated reply.',
+    };
 
-      const emailThread = message.data.threadId;
-      const replies = message.data.payload.headers.filter(
-        (header) => header.name === 'From' && header.value === 'vinit9email@gmail.com'
-      );
+    await transporter.sendMail(mailOptions);
 
-      if (replies.length === 0) {
-        await sendReply(message.data.payload.headers.find((header) => header.name === 'Reply-To').value);
-        await addLabelToEmail(email.id, 'AutoReplied');
-      }
-    }
-  } catch (error) {
-    console.error('Error checking emails and sending replies:', error);
+    await gmail.users.messages.modify({
+      userId: 'me',
+      id: message.id,
+      requestBody: {
+        removeLabelIds: ['UNREAD'],
+      },
+    });
+
+    console.log(`Sent reply to ${fromEmail}`);
   }
+
+  console.log('Done.');
 }
 
-async function runApp() {
-  try {
-    await authorize();
-    setInterval(async () => {
-      await checkEmailsAndSendReplies();
-    }, getRandomInterval());
-  } catch (error) {
-    console.error('Error running the app:', error);
-  }
-}
-
-function getRandomInterval() {
-  return Math.floor(Math.random() * (120 - 45 + 1)) + 45;
-}
-
-runApp();
+checkEmailsAndSendReplies();
